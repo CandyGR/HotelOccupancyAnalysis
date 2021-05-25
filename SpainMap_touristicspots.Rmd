@@ -1,0 +1,54 @@
+---
+title: "Mapa puntos turísticos"
+output: html_notebook
+---
+```{r}
+library(ggplot2)
+library(dplyr)
+library(readxl)
+library(maps)
+library(viridis)
+library(tidyverse)
+library(leaflet)
+library(maptools)
+library(raster)
+library(csv)
+
+setwd("C:/Users/Júlia Gregori/Desktop/Ciencia de Datos 3er/Proy III/mapa final")
+puntos = read_excel("Puntos.xlsx")
+puntos_c = read_excel("Puntos_canarias.xlsx")
+puntos_p = read_excel("Puntos_peninsula.xlsx")
+puntos = puntos %>% separate(Periodo, c("Año", "Mes"), "M")
+puntos_c = puntos_c %>% separate(Periodo, c("Año", "Mes"), "M")
+puntos_p = puntos_p %>% separate(Periodo, c("Año", "Mes"), "M")
+
+puntos$Viajeros_total <- puntos$Viajeros_ext+puntos$Viajeros_esp
+
+puntos = subset(puntos, Año < 2020)
+puntos_sub = puntos %>% group_by(`Puntos turísticos`, Latitud, Longitud, Año) %>% summarise(mean_plazas = mean(Grado_ocup_plazas), mean_viajeros=mean(Viajeros_total))
+```
+
+
+###MAPAS
+
+```{r}
+library(plotly)
+library(mapproj)
+
+g <- list(
+  scope = 'europe')
+
+fig <- plot_geo(puntos_sub, lat = ~Latitud, lon = ~Longitud) %>% add_markers(x = ~Longitud, y = ~Latitud, color = ~mean_plazas, text = ~paste(puntos_sub$`Puntos turísticos`,"<br />",'Grado ocupación plazas', puntos_sub$mean_plazas),hoverinfo = "text",frame=~Año) %>% colorbar(title = "") %>% layout(geo = g)
+
+fig
+```
+
+```{r}
+puntos$Viajeros_total <- puntos$Viajeros_ext+puntos$Viajeros_esp
+
+puntos = subset(puntos, Año < 2020)
+puntos_sub = puntos %>% group_by(`Puntos turísticos`, Latitud, Longitud, Mes) %>% summarise(mean_plazas = mean(Grado_ocup_plazas), mean_viajeros=mean(Viajeros_total))
+
+fig_mes <- plot_geo(puntos_sub, lat = ~Latitud, lon = ~Longitud) %>% add_markers(x = ~Longitud, y = ~Latitud, color = ~mean_plazas, text = ~paste(puntos_sub$`Puntos turísticos`,"<br />",'Grado ocupación plazas', puntos_sub$mean_plazas),hoverinfo = "text",frame=~Mes) %>% colorbar(title = "") %>% layout(geo = g)
+```
+

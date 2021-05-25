@@ -1,0 +1,120 @@
+---
+title: "HotelOccupancy_TS"
+author: "Cándido García Rodríguez, Júlia Gregori Torres, Lluna Pérez Pérez, Andrea García Pastor, Clara Salelles Román, Arturo Serrano Moliner"
+date: "25/5/2021"
+output: html_document
+---
+#librerias
+```{r}
+library(dplyr)
+library(tidyr)
+library(fable)
+library(feasts)
+library(tsibble)
+library(lubridate)
+library(ggplot2)
+library(Amelia)
+
+install.packages("devtools")
+library(devtools)
+install_github("cran/imputeTS")
+library(imputeTS)
+```
+
+#Missing data imputation using ImputeTS package and na_seasplit function
+```{r}
+zon <- readxl::read_excel("C:/Users/garca/Downloads/Zonas_imput.xlsx")
+
+fills<- function(zon){
+  zonas = (levels(as.factor(zon$Zonas)))
+  listofdfs <- list() 
+  for (i in 1:length(unique(as.factor(zon$Zonas)))){ 
+    json_data<- filter(zon, Zonas == zonas[i] & year(yearmonth(Periodo)) <= 2018)
+    data_2k19 <- filter(zon,  year(yearmonth(Periodo)) == 2019)
+    filled <- na_seasplit(json_data, algorithm = "interpolation", find_frequency=TRUE)
+    df<- data.frame(filled)
+    names(df)<-names(zon)
+    listofdfs[[i]] <- df 
+  }
+  zonas_final <- do.call(rbind, listofdfs)
+  zonasfin <- rbind(zonas_final, data_2k19)
+}
+
+zonas<- fills(zon = zon)
+missmap(zonas)
+```
+
+#transform data to time series format
+```{r}
+zon$i <- c(1:nrow(zon))
+zon$Periodo <- yearmonth(as.character(zon$Periodo))
+
+#transform to tsibble format and specify the communities and zones as keys, and the time period as index
+zonas <- zon %>% as_tsibble(key = c(Comunidad,Zonas, i),index = Periodo, .drop = TRUE) 
+
+#aggregate the variables in a hierarchical time series we aggregate the values as sums or means depending if a variable is an integer number such as number of establishment or number of tourists, or a percentage, such as occupation degree
+
+zonas_gts <- zonas %>% aggregate_key(Comunidad/`Zonas`, viajeros_ext = sum(Viajeros_ext), viajeros_esp = sum(Viajeros_esp), viajeros = sum(Viajeros_ext) + sum(Viajeros_esp), est_med = mean(est_med), grado = mean(Grado_ocup_plazas), establ = sum(Num_establecimientos_abiertos), pernoct_ext = sum(Pernoctaciones_ext))
+
+#filter years
+zonas_gts <- zonas_gts %>% filter(year(Periodo) <= 2019)
+
+#fill data if necessary
+zonas_gts2 <- zonas_gts %>% fill_gaps()
+
+#create training and test partition
+train <- zonas_gts2 %>% filter(year(Periodo) <= 2018)
+test <- zonas_gts2 %>% filter(year(Periodo) == 2019)
+```
+
+#TRAINING THE MODELS
+```{r}
+zonas_grad_models <- train %>%
+  model(tslm1 = TSLM(grado ~  trend() + season()),
+        ets = ETS(grado ~ trend() + season()),
+        arima = ARIMA(grado ~ season()),
+        snaive = SNAIVE(grado))
+
+fc <- zonas_grad_models %>% forecast(h = 12)
+
+fc %>%
+  autoplot(test ,level = NULL, size= 1 ) +
+  labs(y = "occupation degree") +
+  facet_wrap(vars(Zonas), scales = "free_y")
+```
+
+#EVALUATION
+```{r}
+residuals1<- train %>% model(ets = ETS(grado ~ season()+ trend())) %>% residuals()
+residuals1 %>% autoplot()
+residuals1 %>% autoplot() +
+  facet_wrap(vars(Zonas), scales = "free_y", ncol = 3) +
+  theme(legend.position = "none")
+
+#arima
+residuals <- train %>% model(arima = ARIMA(grado ~ season() + trend())) %>% residuals() %>% 
+  filter(!is_aggregated(Zonas))
+autoplot(residuals, size = 1) +
+  labs(y = "", x = "Periodo", title = "Residuos de grado de ocupación por Zona por Periodo (ARIMA)")+
+  theme(plot.title = element_text(hjust=0.5, size = 25), legend.text = element_text(size =10), 
+        axis.title = element_text (size=15))
+
+#accuray
+accuracy <- fc %>% accuracy(test) %>%  arrange(RMSE)
+accuracy <- select(accuracy,.model, Zonas, MAE, MAPE, RMSE)
+res<-accuracy %>% filter(is_aggregated(Zonas))
+```
+
+#Choose the best models and train them with all the data and do the predictions for the years until 2023
+```{r}
+zonas_grad_models <- zonas_gts2 %>%
+  model(arima = ARIMA(grado ~ season()+ trend()),
+        ets = ETS(grado ~ trend() + season()))
+
+fc2 <- zonas_grad_models %>% forecast(h = 48)
+
+fc2 %>% filter(!is_aggregated(Zonas)) %>%
+  autoplot() +
+  labs(y = "occupation degree") +
+  facet_wrap(vars(Zonas), scales = "free_y") 
+```
